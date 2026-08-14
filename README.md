@@ -101,13 +101,34 @@ updating one symlink. Restart the IDE after changing the link.
 
 ## Patch stack
 
-1. `0001-shadow-popups-only.patch` adds the additive popup-only shadow flag.
-2. `0002-popup-shadow-style.patch` adjusts popup shadow rendering.
-3. `0003-small-rounded-corners.patch` makes the small rounded-corner radius
-   configurable.
+These patches address a Wayland-specific visual conflict: on compositors such
+as GNOME/Mutter, desktop effects or extensions may provide more consistent
+top-level window shadows and rounded corners than JBR's client-side shadow.
+The stack therefore makes the top-level shadow optional without removing
+popup shadows, which are still useful for menus, dropdowns, and completion
+windows. This is not a claim that Wayland should never use client-side
+shadows; the best result depends on the compositor and whether it provides
+additional decoration.
+
+1. `0001-shadow-popups-only.patch` adds the opt-in
+   `-Dsun.awt.wl.ShadowPopupsOnly=true` mode. Top-level windows and ordinary
+   dialogs stop receiving a JBR shadow, while `Window.Type.POPUP` surfaces keep
+   theirs. With the option absent, existing behavior is unchanged, and
+   `-Dsun.awt.wl.Shadow=false` remains the stronger switch that disables all
+   JBR Wayland shadows.
+2. `0002-popup-shadow-style.patch` changes only popup shadow rendering: it
+   adjusts the popup color, size, corner diameter, and blur kernel so popup
+   shadows remain visible without using the overly heavy top-level style.
+3. `0003-small-rounded-corners.patch` is independent of shadow selection. It
+   makes the `small` rounded-corner radius configurable through
+   `-Dsun.awt.wl.RoundedCornerRadiusSmall=<pixels>`, with a non-negative
+   default value of 10.
 
 See [`docs/wayland-popup-shadow.md`](docs/wayland-popup-shadow.md) for the
 original design, expected behavior, build notes, and manual test matrix.
+
+See [`docs/build-and-runtime-maintenance.md`](docs/build-and-runtime-maintenance.md)
+for the reusable upstream update, build, and stable IDE Runtime workflow.
 
 ## Updating the official source
 
