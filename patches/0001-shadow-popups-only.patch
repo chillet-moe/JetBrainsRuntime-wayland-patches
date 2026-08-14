@@ -1,0 +1,32 @@
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java b/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
+index 11c27e5bb285..eaeefba557b9 100644
+--- a/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
+@@ -126,6 +126,7 @@ public class WLComponentPeer implements ComponentPeer, WLSurfaceSizeListener {
+     private final String kwinAppId; // non-null only when WLKwinHelper.isEnabled() is set
+ 
+     private static final boolean shadowEnabled;
++    private static final boolean shadowPopupsOnly;
+ 
+     static {
+         initIDs();
+@@ -147,6 +148,7 @@ public class WLComponentPeer implements ComponentPeer, WLSurfaceSizeListener {
+             }
+             shadowEnabled = !isWSL;
+         }
++        shadowPopupsOnly = Boolean.getBoolean("sun.awt.wl.ShadowPopupsOnly");
+     }
+ 
+     /**
+@@ -172,8 +174,9 @@ protected WLComponentPeer(Component target, boolean dropShadow) {
+             log.fine("WLComponentPeer: target=" + target + " with size=" + wlSize);
+         }
+ 
+-        if (dropShadow && shadowEnabled) {
+-            shadow = new ShadowImpl(targetIsWlPopup() ? ShadowImage.POPUP_SHADOW_SIZE : ShadowImage.WINDOW_SHADOW_SIZE);
++        boolean isWlPopup = targetIsWlPopup();
++        if (dropShadow && shadowEnabled && (!shadowPopupsOnly || isWlPopup)) {
++            shadow = new ShadowImpl(isWlPopup ? ShadowImage.POPUP_SHADOW_SIZE : ShadowImage.WINDOW_SHADOW_SIZE);
+         } else {
+             shadow = new NilShadow();
+         }

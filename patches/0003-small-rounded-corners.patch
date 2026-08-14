@@ -1,0 +1,20 @@
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLRoundedCornersManager.java b/src/java.desktop/unix/classes/sun/awt/wl/WLRoundedCornersManager.java
+--- a/src/java.desktop/unix/classes/sun/awt/wl/WLRoundedCornersManager.java
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLRoundedCornersManager.java
+@@ -38,4 +38,8 @@ public class WLRoundedCornersManager implements RoundedCornersManager {
+ 
+ public class WLRoundedCornersManager implements RoundedCornersManager {
++    private static final String SMALL_CORNER_RADIUS_PROPERTY = "sun.awt.wl.RoundedCornerRadiusSmall";
++    private static final int DEFAULT_SMALL_CORNER_RADIUS = 10;
++    private static final int SMALL_CORNER_RADIUS =
++            Math.max(0, Integer.getInteger(SMALL_CORNER_RADIUS_PROPERTY, DEFAULT_SMALL_CORNER_RADIUS));
+ 
+     public WLRoundedCornersManager() {
+@@ -100,6 +104,6 @@ public static RoundedCornerKind roundedCornerKindFrom(Object o) {
+             return switch (kind) {
+                 case "none" -> RoundedCornerKind.NONE;
+-                case "small" -> new CustomRoundedCorners(8);
++                case "small" -> new CustomRoundedCorners(SMALL_CORNER_RADIUS);
+                 case "full" -> new CustomRoundedCorners(24);
+                 default -> RoundedCornerKind.DEFAULT;
+             };

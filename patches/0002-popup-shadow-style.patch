@@ -1,0 +1,71 @@
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java b/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
+index eaeefba557b9..1e37934bae04 100644
+--- a/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
+@@ -84,7 +84,6 @@
+ import java.io.IOException;
+ import java.nio.file.Files;
+ import java.nio.file.Path;
+-import java.util.Arrays;
+ import java.util.Objects;
+ import java.util.function.Supplier;
+ 
+@@ -1962,23 +1961,28 @@ private interface Shadow {
+     private static class ShadowImage {
+         private static final Color activeColor = new Color(0, 0, 0, 0xA0);
+         private static final Color inactiveColor = new Color(0, 0, 0, 0x40);
+-        private static final Color popupColor = new Color(0, 0, 0, 0x40);
++        private static final Color popupColor = new Color(0, 0, 0, 0x4C);
+ 
+         public static final int WINDOW_SHADOW_SIZE = 20;
+-        public static final int POPUP_SHADOW_SIZE = 10;
++        public static final int POPUP_SHADOW_SIZE = 24;
++        public static final int POPUP_CORNER_DIAMETER = 18;
+ 
+         public static final ShadowImage windowShadowActive = new ShadowImage(WINDOW_SHADOW_SIZE, activeColor);
+         public static final ShadowImage windowShadow = new ShadowImage(WINDOW_SHADOW_SIZE, inactiveColor);
+-        public static final ShadowImage popupShadow = new ShadowImage(POPUP_SHADOW_SIZE, popupColor);
++        public static final ShadowImage popupShadow = new ShadowImage(POPUP_SHADOW_SIZE, POPUP_CORNER_DIAMETER, popupColor);
+ 
+         private final BufferedImage image;
+         private final int shadowSize;
+         private final Color color;
+ 
+         public ShadowImage(int shadowSize, Color color) {
++            this(shadowSize, shadowSize, color);
++        }
++
++        public ShadowImage(int shadowSize, int cornerDiameter, Color color) {
+             this.shadowSize = shadowSize;
+             this.color = color;
+-            image = create(shadowSize * 8, shadowSize * 8, shadowSize, shadowSize);
++            image = create(shadowSize * 8, shadowSize * 8, cornerDiameter, shadowSize);
+         }
+ 
+         public static ShadowImage forSize(int size, boolean active) {
+@@ -2009,8 +2013,23 @@ private BufferedImage create(int width, int height, int arc, int shadowSize) {
+ 
+         private float[] createBlurKernel(int size) {
+             float[] kernel = new float[size * size];
+-            float value = 1.0f / (size * size);
+-            Arrays.fill(kernel, value);
++            double sigma = size / 3.0;
++            double twoSigmaSquare = 2.0 * sigma * sigma;
++            double center = (size - 1) / 2.0;
++            double sum = 0.0;
++
++            for (int y = 0; y < size; y++) {
++                for (int x = 0; x < size; x++) {
++                    double dx = x - center;
++                    double dy = y - center;
++                    double value = Math.exp(-(dx * dx + dy * dy) / twoSigmaSquare);
++                    kernel[y * size + x] = (float) value;
++                    sum += value;
++                }
++            }
++            for (int i = 0; i < kernel.length; i++) {
++                kernel[i] /= (float) sum;
++            }
+             return kernel;
+         }
+ 
