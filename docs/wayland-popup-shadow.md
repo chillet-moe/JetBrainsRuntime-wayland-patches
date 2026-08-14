@@ -275,6 +275,20 @@ Expected output is under a directory similar to:
 build/linux-x86_64-server-release/images/jdk
 ```
 
+The generated worktree is content-keyed by the upstream commit and patch
+fingerprint, so its full path changes when the source or patch stack changes.
+After `make images`, expose the selected image through the stable user-level
+link used by the IDE configuration files:
+
+```bash
+./tools/update-current-runtime.sh
+```
+
+This updates `~/.local/share/jbr-wayland/current`. The script validates the
+JDK image and replaces the link atomically. IDE product `.jdk` files should
+contain this stable path rather than a content-keyed build path. To select a
+specific image, pass its `images/jdk` directory as the script argument.
+
 For JetBrains IDE usage, prefer a JBR/JBRSDK build flavor compatible with the IDE. Note that JetBrains IDEs normally bundle a JBR-with-JCEF flavor, so a plain custom JBR may affect embedded-browser features such as Markdown preview or some web views.
 
 ### Fast validation option: patch-module prototype

@@ -27,6 +27,7 @@ upstream/                         clean official JBR submodule
 patches/                          ordered unified patches
 docs/                             design and manual-test notes
 tools/apply-patches.sh            create a persistent patched worktree
+tools/update-current-runtime.sh   update the stable IDE Runtime symlink
 tools/verify.sh                   check and apply the stack temporarily
 upstream.lock                     human-readable baseline pin
 build/                            ignored generated worktrees and build data
@@ -62,6 +63,41 @@ To reproduce the intended runtime behavior, add this VM option to the IDE:
 
 The existing `-Dsun.awt.wl.Shadow=false` property remains stronger and still
 disables all JBR Wayland shadows.
+
+## Build and select the current IDE Runtime
+
+Configure and build the generated source tree with the normal JBR commands:
+
+```sh
+bash configure --with-boot-jdk=/path/to/boot-jdk
+make images
+```
+
+After a successful build, update the stable user-level Runtime link:
+
+```sh
+./tools/update-current-runtime.sh
+```
+
+By default, the script finds the image matching the current upstream commit and
+patch fingerprint, then atomically updates:
+
+```text
+~/.local/share/jbr-wayland/current
+```
+
+The target can also be supplied explicitly, and the link location can be
+overridden with `JBR_RUNTIME_LINK`:
+
+```sh
+./tools/update-current-runtime.sh /path/to/images/jdk
+JBR_RUNTIME_LINK=/some/stable/path ./tools/update-current-runtime.sh
+```
+
+Configure each IDE's product `.jdk` file to contain only the stable link path,
+for example `~/.config/JetBrains/WebStorm2026.2/webstorm.jdk`. The IDE then
+keeps the same configuration while new content-keyed builds are selected by
+updating one symlink. Restart the IDE after changing the link.
 
 ## Patch stack
 
