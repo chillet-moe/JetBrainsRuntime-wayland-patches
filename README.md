@@ -13,8 +13,8 @@ clean and can be updated independently.
 ```text
 repository: git@github.com:JetBrains/JetBrainsRuntime.git
 branch:     jbr25
-tag:        jb25.0.4-b570
-commit:     25b665dd51df4873cd9a5e4b40fad07857730d32
+tag:        unreleased-after-jb25.0.4-b570
+commit:     868e6eaecc700d03b903fcb3b723d30c17d64de4
 ```
 
 The baseline is deliberately JBR 25. The upstream `main` branch is a
@@ -101,14 +101,12 @@ updating one symlink. Restart the IDE after changing the link.
 
 ## Patch stack
 
-These patches address a Wayland-specific visual conflict: on compositors such
-as GNOME/Mutter, desktop effects or extensions may provide more consistent
-top-level window shadows and rounded corners than JBR's client-side shadow.
-The stack therefore makes the top-level shadow optional without removing
-popup shadows, which are still useful for menus, dropdowns, and completion
-windows. This is not a claim that Wayland should never use client-side
-shadows; the best result depends on the compositor and whether it provides
-additional decoration.
+The first three patches address a Wayland-specific visual conflict: on
+compositors such as GNOME/Mutter, desktop effects or extensions may provide
+more consistent top-level window shadows and rounded corners than JBR's
+client-side shadow. The fourth patch independently adds native fractional
+scaling so rendering uses the compositor's exact scale instead of an
+integer-scaled buffer that is resampled.
 
 1. `0001-shadow-popups-only.patch` adds the opt-in
    `-Dsun.awt.wl.ShadowPopupsOnly=true` mode. Top-level windows and ordinary
@@ -123,9 +121,18 @@ additional decoration.
    makes the `small` rounded-corner radius configurable through
    `-Dsun.awt.wl.RoundedCornerRadiusSmall=<pixels>`, with a non-negative
    default value of 10.
+4. `0004-fractional-scale-v1.patch` binds `wp_fractional_scale_manager_v1`,
+   creates per-surface fractional-scale objects, derives the initial 1/120-step
+   scale from physical and logical output metrics, and sizes Java2D/Vulkan
+   backing buffers at that exact scale. `wp_viewporter` keeps the Wayland
+   surface in logical units. Compositors without the optional protocol retain
+   the integer-scale fallback.
 
 See [`docs/wayland-popup-shadow.md`](docs/wayland-popup-shadow.md) for the
 original design, expected behavior, build notes, and manual test matrix.
+
+See [`docs/wayland-fractional-scale.md`](docs/wayland-fractional-scale.md) for
+the fractional-scale data flow, fallback behavior, and isolated test plan.
 
 See [`docs/build-and-runtime-maintenance.md`](docs/build-and-runtime-maintenance.md)
 for the reusable upstream update, build, and stable IDE Runtime workflow.

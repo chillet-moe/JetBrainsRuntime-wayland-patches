@@ -38,7 +38,8 @@ ignored patched worktree for building and manual testing.
 
 ## Updating the upstream baseline
 
-The current patch stack targets JBR 25 (`jbr25`, `jb25.0.4-b570`). Do not
+The current patch stack targets JBR 25 (`jbr25`, commit `868e6eaecc70`, after
+`jb25.0.4-b570`). Do not
 replace it with the repository's newer `main` line unless the patch target is
 intentionally migrated.
 

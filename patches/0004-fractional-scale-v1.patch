@@ -1,0 +1,647 @@
+diff --git a/make/modules/java.desktop/gensrc/GensrcWayland.gmk b/make/modules/java.desktop/gensrc/GensrcWayland.gmk
+index 4e1fe66c5176..0d6e73716380 100644
+--- a/make/modules/java.desktop/gensrc/GensrcWayland.gmk
++++ b/make/modules/java.desktop/gensrc/GensrcWayland.gmk
+@@ -31,6 +31,7 @@
+ WAYLAND_GENSRC_DIR = $(SUPPORT_OUTPUTDIR)/gensrc/java.desktop/wayland
+ WAYLAND_BASIC_PROTOCOL_FILES := \
+         $(WAYLAND_PROTOCOLS_ROOT)/stable/viewporter/viewporter.xml \
++        $(WAYLAND_PROTOCOLS_ROOT)/staging/fractional-scale/fractional-scale-v1.xml \
+         $(WAYLAND_PROTOCOLS_ROOT)/stable/xdg-shell/xdg-shell.xml \
+         $(WAYLAND_PROTOCOLS_ROOT)/staging/xdg-activation/xdg-activation-v1.xml \
+         $(WAYLAND_PROTOCOLS_ROOT)/staging/xdg-toplevel-icon/xdg-toplevel-icon-v1.xml \
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java b/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
+index d1b22026c242..22859220c58e 100644
+--- a/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLComponentPeer.java
+@@ -189,6 +189,12 @@ int getDisplayScale() {
+         }
+     }
+ 
++    double getEffectiveScale() {
++        synchronized (getStateLock()) {
++            return effectiveScale;
++        }
++    }
++
+     public int getWidth() {
+         return wlSize.getJavaWidth();
+     }
+@@ -505,7 +511,7 @@ static boolean isWlPopup(Window window) {
+     void updateSurfaceData() {
+         performLocked(() -> {
+             SurfaceData.convertTo(WLSurfaceDataExt.class, surfaceData).revalidate(
+-                    getGraphicsConfiguration(), getBufferWidth(), getBufferHeight(), getDisplayScale());
++                    getGraphicsConfiguration(), getBufferWidth(), getBufferHeight(), getEffectiveScale());
+ 
+             shadow.updateSurfaceData();
+         });
+@@ -1119,14 +1125,17 @@ public void applyShape(Region shape) {
+ 
+     @Override
+     public boolean updateGraphicsData(GraphicsConfiguration gc) {
+-        final int newScale = ((WLGraphicsConfig)gc).getDisplayScale();
++        final WLGraphicsConfig newConfig = (WLGraphicsConfig) gc;
++        final int newScale = newConfig.getDisplayScale();
++        final double newEffectiveScale = newConfig.getEffectiveScale();
+ 
+         WLGraphicsDevice gd = ((WLGraphicsConfig) gc).getDevice();
+         gd.addWindow(this);
+         synchronized (getStateLock()) {
+-            if (newScale != displayScale) {
++            if (newScale != displayScale
++                    || Double.compare(newEffectiveScale, effectiveScale) != 0) {
+                 displayScale = newScale;
+-                effectiveScale = ((WLGraphicsConfig)gc).getEffectiveScale();
++                effectiveScale = newEffectiveScale;
+                 wlSize.updateWithNewScale();
+                 shadow.resizeToParentWindow();
+                 if (log.isLoggable(PlatformLogger.Level.FINE)) {
+@@ -2223,7 +2232,7 @@ public void updateSurfaceData() {
+ 
+             needsRepaint = true;
+             SurfaceData.convertTo(WLSurfaceDataExt.class, shadowSurfaceData).revalidate(
+-                    getGraphicsConfiguration(), shadowWlSize.getPixelWidth(), shadowWlSize.getPixelHeight(), getDisplayScale());
++                    getGraphicsConfiguration(), shadowWlSize.getPixelWidth(), shadowWlSize.getPixelHeight(), getEffectiveScale());
+         }
+ 
+         public void paint() {
+@@ -2309,8 +2318,8 @@ void deriveFromJavaSize(int width, int height) {
+             synchronized (getStateLock()) {
+                 javaSize.width = width;
+                 javaSize.height = height;
+-                pixelSize.width = (int) (width * effectiveScale);
+-                pixelSize.height = (int) (height * effectiveScale);
++                pixelSize.width = (int) Math.ceil(width * effectiveScale);
++                pixelSize.height = (int) Math.ceil(height * effectiveScale);
+                 surfaceSize.width = javaUnitsToSurfaceSize(width);
+                 surfaceSize.height = javaUnitsToSurfaceSize(height);
+             }
+@@ -2320,8 +2329,8 @@ void deriveFromSurfaceSize(int width, int height) {
+             synchronized (getStateLock()) {
+                 javaSize.width = surfaceUnitsToJavaSize(width);
+                 javaSize.height = surfaceUnitsToJavaSize(height);
+-                pixelSize.width = width * displayScale;
+-                pixelSize.height = height * displayScale;
++                pixelSize.width = (int) Math.ceil(javaSize.width * effectiveScale);
++                pixelSize.height = (int) Math.ceil(javaSize.height * effectiveScale);
+                 surfaceSize.width = width;
+                 surfaceSize.height = height;
+             }
+@@ -2329,8 +2338,8 @@ void deriveFromSurfaceSize(int width, int height) {
+ 
+         void updateWithNewScale() {
+             synchronized (getStateLock()) {
+-                pixelSize.width = (int)(javaSize.width * effectiveScale);
+-                pixelSize.height = (int)(javaSize.height * effectiveScale);
++                pixelSize.width = (int) Math.ceil(javaSize.width * effectiveScale);
++                pixelSize.height = (int) Math.ceil(javaSize.height * effectiveScale);
+                 surfaceSize.width = javaUnitsToSurfaceSize(javaSize.width);
+                 surfaceSize.height = javaUnitsToSurfaceSize(javaSize.height);
+             }
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLGraphicsDevice.java b/src/java.desktop/unix/classes/sun/awt/wl/WLGraphicsDevice.java
+index 8c8fcf71c4ee..8cbf01500c5e 100644
+--- a/src/java.desktop/unix/classes/sun/awt/wl/WLGraphicsDevice.java
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLGraphicsDevice.java
+@@ -153,7 +153,8 @@ private WLGraphicsDevice(int id,
+         this.widthMm = widthMm;
+         this.heightMm = heightMm;
+         this.displayScale = displayScale;
+-        this.effectiveScale = WLGraphicsEnvironment.effectiveScaleFrom(displayScale);
++        this.effectiveScale = WLGraphicsEnvironment.effectiveScaleFrom(
++                displayScale, width, height, widthLogical, heightLogical);
+ 
+         makeGC();
+     }
+@@ -202,7 +203,8 @@ void updateConfiguration(String name,
+         this.widthMm = widthMm;
+         this.heightMm = heightMm;
+         this.displayScale = scale;
+-        this.effectiveScale =  WLGraphicsEnvironment.effectiveScaleFrom(scale);
++        this.effectiveScale = WLGraphicsEnvironment.effectiveScaleFrom(
++                scale, width, height, widthLogical, heightLogical);
+ 
+         // It is necessary to create new config objects whenever this device changes
+         // as GraphicsConfiguration identity is used to detect changes in scale, among other things.
+@@ -213,22 +215,8 @@ void updateConfiguration(String name,
+         // to refer to the new ones with, perhaps, a different scale or resolution.
+         // This affects various BufferStrategy that use volatile images as their buffers.
+ 
+-        List<WLComponentPeer> toplevelsCopy = new ArrayList<>(toplevels.size());
+-        synchronized (this) {
+-            for (var toplevel: toplevels) {
+-                WLComponentPeer peer = toplevel.get();
+-                if (peer != null) {
+-                    toplevelsCopy.add(peer);
+-                }
+-            }
+-        }
+-
+-        toplevelsCopy.forEach(
+-                wlComponentPeer ->
+-                        wlComponentPeer.notifyOutputChanged(
+-                                this, OutputChange.CHANGED,
+-                                dx != 0 || dy != 0 ? WL_OUTPUT_CHANGED_ORIGIN : 0,
+-                                dx, dy));
++        notifyToplevelsConfigurationChanged(
++                dx != 0 || dy != 0 ? WL_OUTPUT_CHANGED_ORIGIN : 0, dx, dy);
+ 
+     }
+ 
+@@ -320,6 +308,36 @@ int getDisplayScale() {
+         return effectiveScale;
+     }
+ 
++    boolean updateEffectiveScale(double scale) {
++        if (WLGraphicsEnvironment.isDebugScaleEnabled()
++                || !Double.isFinite(scale)
++                || scale <= 0
++                || Double.compare(scale, effectiveScale) == 0) {
++            return false;
++        }
++
++        effectiveScale = scale;
++        makeGC();
++
++        notifyToplevelsConfigurationChanged(0, 0, 0);
++        return true;
++    }
++
++    private void notifyToplevelsConfigurationChanged(int mask, int dx, int dy) {
++        List<WLComponentPeer> toplevelsCopy;
++        synchronized (this) {
++            toplevelsCopy = new ArrayList<>(toplevels.size());
++            for (var toplevel : toplevels) {
++                WLComponentPeer peer = toplevel.get();
++                if (peer != null) {
++                    toplevelsCopy.add(peer);
++                }
++            }
++        }
++        toplevelsCopy.forEach(peer ->
++                peer.notifyOutputChanged(this, OutputChange.CHANGED, mask, dx, dy));
++    }
++
+     int getResolution() {
+         // must match the horizontal resolution to pass tests
+         return getResolutionX(defaultConfig);
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLGraphicsEnvironment.java b/src/java.desktop/unix/classes/sun/awt/wl/WLGraphicsEnvironment.java
+index 1da0371cd13d..45556e6f9617 100644
+--- a/src/java.desktop/unix/classes/sun/awt/wl/WLGraphicsEnvironment.java
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLGraphicsEnvironment.java
+@@ -202,7 +202,8 @@ private void notifyOutputConfigured(String name, String make, String model, int
+         }
+ 
+         if (LogDisplay.ENABLED) {
+-            double effectiveScale = effectiveScaleFrom(scale);
++            double effectiveScale = effectiveScaleFrom(
++                    scale, width, height, widthLogical, heightLogical);
+             LogDisplay log = (gd == null) ? LogDisplay.ADDED : LogDisplay.CHANGED;
+             log.log(wlID, (int) (width / effectiveScale) + "x" + (int) (height / effectiveScale), effectiveScale);
+         }
+@@ -308,8 +309,14 @@ private void updateTotalDisplayBounds() {
+         }
+     }
+ 
+-    static double effectiveScaleFrom(int displayScale) {
+-        return debugScaleEnabled ? SunGraphicsEnvironment.getDebugScale() : displayScale;
++    static double effectiveScaleFrom(int displayScale,
++                                     int width, int height,
++                                     int widthLogical, int heightLogical) {
++        if (debugScaleEnabled) {
++            return SunGraphicsEnvironment.getDebugScale();
++        }
++        return WLScaleUtils.fromOutputMetrics(
++                displayScale, width, height, widthLogical, heightLogical);
+     }
+ 
+     static boolean isDebugScaleEnabled() {
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLMainSurface.java b/src/java.desktop/unix/classes/sun/awt/wl/WLMainSurface.java
+index 6f4d9a501e59..90179427bb23 100644
+--- a/src/java.desktop/unix/classes/sun/awt/wl/WLMainSurface.java
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLMainSurface.java
+@@ -43,7 +43,7 @@ public WLMainSurface(WLWindowPeer peer) {
+     }
+ 
+     WLGraphicsDevice getGraphicsDevice() {
+-        int scale = 0;
++        double scale = 0;
+         WLGraphicsDevice theDevice = null;
+         // AFAIK there's no way of knowing which WLGraphicsDevice is displaying
+         // the largest portion of this component, so choose the first in the ordered list
+@@ -52,8 +52,8 @@ WLGraphicsDevice getGraphicsDevice() {
+         // Wayland's output and are removed as soon as we have left.
+         synchronized (devices) {
+             for (WLGraphicsDevice gd : devices) {
+-                if (gd.getDisplayScale() > scale) {
+-                    scale = gd.getDisplayScale();
++                if (gd.getEffectiveScale() > scale) {
++                    scale = gd.getEffectiveScale();
+                     theDevice = gd;
+                 }
+             }
+@@ -96,6 +96,26 @@ void notifyLeftOutput(int wlOutputID) {
+         }
+     }
+ 
++    @Override
++    void notifyPreferredScale(int scaleNumerator) {
++        if (scaleNumerator <= 0) {
++            return;
++        }
++
++        WLGraphicsDevice device = null;
++        synchronized (devices) {
++            // preferred_scale is per-surface. Do not overwrite an output's
++            // shared GraphicsConfiguration while the surface spans outputs.
++            if (devices.size() == 1) {
++                device = devices.getFirst();
++            }
++        }
++
++        if (device != null && device.updateEffectiveScale(scaleNumerator / 120.0)) {
++            WLGraphicsEnvironment.getSingleInstance().displayChanged();
++        }
++    }
++
+     public void activateByAnotherSurface(long serial, long activatingSurfacePtr) {
+         assert SunToolkit.isAWTLockHeldByCurrentThread() : "This method must be invoked while holding the AWT lock";
+         assertIsValid();
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLScaleUtils.java b/src/java.desktop/unix/classes/sun/awt/wl/WLScaleUtils.java
+new file mode 100644
+index 000000000000..0463ac8866d3
+--- /dev/null
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLScaleUtils.java
+@@ -0,0 +1,52 @@
++/*
++ * Copyright (c) 2026, JetBrains s.r.o.. All rights reserved.
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * This code is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 only, as
++ * published by the Free Software Foundation.  Oracle designates this
++ * particular file as subject to the "Classpath" exception as provided
++ * by Oracle in the LICENSE file that accompanied this code.
++ *
++ * This code is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * version 2 for more details (a copy is included in the LICENSE file that
++ * accompanied this code).
++ *
++ * You should have received a copy of the GNU General Public License version
++ * 2 along with this work; if not, write to the Free Software Foundation,
++ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
++ *
++ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
++ * or visit www.oracle.com if you need additional information or have any
++ * questions.
++ */
++
++package sun.awt.wl;
++
++final class WLScaleUtils {
++    private WLScaleUtils() {
++    }
++
++    static double fromOutputMetrics(int displayScale,
++                                    int width, int height,
++                                    int widthLogical, int heightLogical) {
++        double logicalDiagonal = Math.hypot(widthLogical, heightLogical);
++        if (width <= 0 || height <= 0 || logicalDiagonal <= 0) {
++            return displayScale;
++        }
++
++        double scale = Math.hypot(width, height) / logicalDiagonal;
++        double protocolScale = Math.rint(scale * 120.0) / 120.0;
++
++        // wl_output.scale is the preferred integer buffer scale and therefore
++        // the ceiling of the fractional scale on compositors that advertise one.
++        if (!Double.isFinite(protocolScale)
++                || protocolScale <= displayScale - 1.0
++                || protocolScale > displayScale) {
++            return displayScale;
++        }
++        return protocolScale;
++    }
++}
+diff --git a/src/java.desktop/unix/classes/sun/awt/wl/WLSurface.java b/src/java.desktop/unix/classes/sun/awt/wl/WLSurface.java
+index 5accbc64cdc2..ec80bca199ba 100644
+--- a/src/java.desktop/unix/classes/sun/awt/wl/WLSurface.java
++++ b/src/java.desktop/unix/classes/sun/awt/wl/WLSurface.java
+@@ -150,6 +150,10 @@ void notifyLeftOutput(int wlOutputID) {
+         // Called from native code whenever the corresponding wl_surface leaves an output (monitor)
+     }
+ 
++    void notifyPreferredScale(int scaleNumerator) {
++        // Overridden by surfaces whose backing-buffer scale follows compositor feedback.
++    }
++
+     public void updateSurfaceSize(int surfaceWidth, int surfaceHeight) {
+         assert SunToolkit.isAWTLockHeldByCurrentThread() : "This method must be invoked while holding the AWT lock";
+         assertIsValid();
+diff --git a/src/java.desktop/unix/classes/sun/java2d/vulkan/WLVKWindowSurfaceData.java b/src/java.desktop/unix/classes/sun/java2d/vulkan/WLVKWindowSurfaceData.java
+index 8780e1e65b4f..c12bdc301538 100644
+--- a/src/java.desktop/unix/classes/sun/java2d/vulkan/WLVKWindowSurfaceData.java
++++ b/src/java.desktop/unix/classes/sun/java2d/vulkan/WLVKWindowSurfaceData.java
+@@ -99,7 +99,7 @@ public void assignSurface(long surfacePtr) {
+     }
+ 
+     @Override
+-    public void revalidate(GraphicsConfiguration gc, int width, int height, int scale) {
++    public void revalidate(GraphicsConfiguration gc, int width, int height, double scale) {
+         this.width = width;
+         this.height = height;
+         this.scale = scale;
+@@ -141,4 +141,4 @@ public int getRGBPixelAt(int x, int y) {
+         image.getRGB(0, 0, b.width, b.height, pixels, 0, b.width);
+         return pixels;
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/java.desktop/unix/classes/sun/java2d/wl/WLSMSurfaceData.java b/src/java.desktop/unix/classes/sun/java2d/wl/WLSMSurfaceData.java
+index 93a872e3fa68..f65c96323885 100644
+--- a/src/java.desktop/unix/classes/sun/java2d/wl/WLSMSurfaceData.java
++++ b/src/java.desktop/unix/classes/sun/java2d/wl/WLSMSurfaceData.java
+@@ -154,7 +154,7 @@ public Object getDestination() {
+         return target;
+     }
+ 
+-    public void revalidate(GraphicsConfiguration gc, int width, int height, int scale) {
++    public void revalidate(GraphicsConfiguration gc, int width, int height, double scale) {
+         Objects.requireNonNull(gc);
+ 
+         WLSMGraphicsConfig wlgc = (WLSMGraphicsConfig) gc;
+@@ -162,7 +162,7 @@ public void revalidate(GraphicsConfiguration gc, int width, int height, int scal
+         this.width = width;
+         this.height = height;
+ 
+-        nativeRevalidate(width, height, scale);
++        nativeRevalidate(width, height);
+     }
+ 
+     @Override
+@@ -209,7 +209,7 @@ private void countDroppedFrame() {
+         }
+     }
+ 
+-    private native void nativeRevalidate(int width, int height, int scale);
++    private native void nativeRevalidate(int width, int height);
+     private native int pixelAt(int x, int y);
+     private native int [] pixelsAt(int x, int y, int width, int height);
+ }
+diff --git a/src/java.desktop/unix/classes/sun/java2d/wl/WLSurfaceDataExt.java b/src/java.desktop/unix/classes/sun/java2d/wl/WLSurfaceDataExt.java
+index 1ace43f966b6..7598e0d174c7 100644
+--- a/src/java.desktop/unix/classes/sun/java2d/wl/WLSurfaceDataExt.java
++++ b/src/java.desktop/unix/classes/sun/java2d/wl/WLSurfaceDataExt.java
+@@ -30,5 +30,5 @@
+ 
+ public interface WLSurfaceDataExt {
+     void assignSurface(long surfacePtr);
+-    void revalidate(GraphicsConfiguration gc, int width, int height, int scale);
++    void revalidate(GraphicsConfiguration gc, int width, int height, double scale);
+ }
+diff --git a/src/java.desktop/unix/native/common/java2d/wl/WLSMSurfaceData.c b/src/java.desktop/unix/native/common/java2d/wl/WLSMSurfaceData.c
+index 32ace3606a39..f619f72592ce 100644
+--- a/src/java.desktop/unix/native/common/java2d/wl/WLSMSurfaceData.c
++++ b/src/java.desktop/unix/native/common/java2d/wl/WLSMSurfaceData.c
+@@ -126,7 +126,7 @@ Java_sun_java2d_wl_WLSMSurfaceData_commit(JNIEnv *env, jobject wsd)
+ 
+ JNIEXPORT void JNICALL
+ Java_sun_java2d_wl_WLSMSurfaceData_nativeRevalidate(JNIEnv *env, jobject wsd,
+-                                              jint width, jint height, jint scale)
++                                              jint width, jint height)
+ {
+ #ifndef HEADLESS
+     J2dTrace(J2D_TRACE_INFO, "WLSMSurfaceData_revalidate to size %d x %d\n", width, height);
+diff --git a/src/java.desktop/unix/native/libawt_wlawt/WLSurface.c b/src/java.desktop/unix/native/libawt_wlawt/WLSurface.c
+index d7a17e266c1e..e8db381e3dab 100644
+--- a/src/java.desktop/unix/native/libawt_wlawt/WLSurface.c
++++ b/src/java.desktop/unix/native/libawt_wlawt/WLSurface.c
+@@ -39,6 +39,7 @@
+ 
+ static jmethodID notifyEnteredOutputMID;
+ static jmethodID notifyLeftOutputMID;
++static jmethodID notifyPreferredScaleMID;
+ 
+ struct activation_token_list_item {
+     struct xdg_activation_token_v1 *token;
+@@ -48,6 +49,7 @@ struct activation_token_list_item {
+ struct WLSurfaceDescr {
+     struct wl_surface* wlSurface;
+     struct wp_viewport* viewport;
++    struct wp_fractional_scale_v1* fractionalScale;
+     jobject javaSurface; // a global reference to WLSurface
+     struct activation_token_list_item *activation_token_list;
+ };
+@@ -104,8 +106,32 @@ Java_sun_awt_wl_WLSurface_initIDs
+     CHECK_NULL_THROW_IE(env,
+                         notifyLeftOutputMID = (*env)->GetMethodID(env, clazz, "notifyLeftOutput", "(I)V"),
+                         "Failed to find method WLSurface.notifyLeftOutput");
++    CHECK_NULL_THROW_IE(env,
++                        notifyPreferredScaleMID = (*env)->GetMethodID(env, clazz, "notifyPreferredScale", "(I)V"),
++                        "Failed to find method WLSurface.notifyPreferredScale");
++}
++
++static void
++fractional_scale_preferred
++        (void *data, struct wp_fractional_scale_v1 *fractional_scale, uint32_t scale)
++{
++    (void) fractional_scale;
++    struct WLSurfaceDescr* sd = data;
++    assert(sd);
++
++    JNIEnv *env = getEnv();
++    const jobject javaSurface = (*env)->NewLocalRef(env, sd->javaSurface);
++    if (javaSurface) {
++        (*env)->CallVoidMethod(env, javaSurface, notifyPreferredScaleMID, (jint) scale);
++        wlListenerCheckException(env);
++        (*env)->DeleteLocalRef(env, javaSurface);
++    }
+ }
+ 
++static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
++        .preferred_scale = fractional_scale_preferred,
++};
++
+ static void
+ wl_surface_entered_output
+         (void *data, struct wl_surface *wl_surface, struct wl_output *output)
+@@ -156,19 +182,37 @@ Java_sun_awt_wl_WLSurface_nativeCreateWlSurface
+     CHECK_NULL_THROW_OOME_RETURN(env, javaObjRef, "Couldn't create a global reference to WLSurface", 0);
+ 
+     struct wl_surface* surface = wl_compositor_create_surface(wl_compositor);
+-    struct wp_viewport* viewport = wp_viewporter_get_viewport(wp_viewporter, surface);
++    struct wp_viewport* viewport = surface != NULL
++            ? wp_viewporter_get_viewport(wp_viewporter, surface)
++            : NULL;
+ 
+     if (surface && viewport && javaObjRef) {
+         struct WLSurfaceDescr* data = calloc(1, sizeof(struct WLSurfaceDescr));
++        if (data == NULL) {
++            wp_viewport_destroy(viewport);
++            wl_surface_destroy(surface);
++            (*env)->DeleteGlobalRef(env, javaObjRef);
++            JNU_ThrowOutOfMemoryError(env, "Failed to allocate a Wayland surface descriptor");
++            return 0;
++        }
+ 
+         data->wlSurface = surface;
+         data->viewport = viewport;
+         data->javaSurface = javaObjRef;
++        if (wp_fractional_scale_manager_v1 != NULL) {
++            data->fractionalScale = wp_fractional_scale_manager_v1_get_fractional_scale(
++                    wp_fractional_scale_manager_v1, surface);
++            if (data->fractionalScale != NULL) {
++                wp_fractional_scale_v1_add_listener(
++                        data->fractionalScale, &fractional_scale_listener, data);
++            }
++        }
+         wl_surface_add_listener(surface, &wl_surface_listener, data);
+         return ptr_to_jlong(data);
+     } else {
+         if (viewport) wp_viewport_destroy(viewport);
+         if (surface) wl_surface_destroy(surface);
++        (*env)->DeleteGlobalRef(env, javaObjRef);
+     }
+ 
+     return 0;
+@@ -191,6 +235,9 @@ Java_sun_awt_wl_WLSurface_nativeDestroyWlSurface
+     struct WLSurfaceDescr* sd = jlong_to_ptr(ptr);
+     assert (sd);
+ 
++    if (sd->fractionalScale != NULL) {
++        wp_fractional_scale_v1_destroy(sd->fractionalScale);
++    }
+     wp_viewport_destroy(sd->viewport);
+     wl_surface_destroy(sd->wlSurface);
+     delete_all_tokens(sd->activation_token_list);
+@@ -327,4 +374,3 @@ Java_sun_awt_wl_WLSubSurface_nativeSetPosition
+ 
+     wl_subsurface_set_position(subSurface, x, y);
+ }
+-
+diff --git a/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.c b/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.c
+index b81ebe47c559..e0caf1283332 100644
+--- a/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.c
++++ b/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.c
+@@ -65,6 +65,7 @@ struct wl_compositor *wl_compositor = NULL;
+ struct wl_subcompositor *wl_subcompositor = NULL;
+ struct xdg_wm_base *xdg_wm_base = NULL;
+ struct wp_viewporter *wp_viewporter = NULL;
++struct wp_fractional_scale_manager_v1 *wp_fractional_scale_manager_v1 = NULL;
+ struct xdg_activation_v1 *xdg_activation_v1 = NULL; // optional, check for NULL before use
+ struct wl_seat     *wl_seat = NULL;
+ struct wl_keyboard *wl_keyboard; // optional, check for NULL before use
+@@ -681,6 +682,9 @@ registry_global(void *data, struct wl_registry *wl_registry,
+         zwp_selection_dm = wl_registry_bind(wl_registry, name, &zwp_primary_selection_device_manager_v1_interface, 1);
+     } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+         wp_viewporter = wl_registry_bind(wl_registry, name, &wp_viewporter_interface, 1);
++    } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
++        wp_fractional_scale_manager_v1 = wl_registry_bind(
++                wl_registry, name, &wp_fractional_scale_manager_v1_interface, 1);
+     } else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
+         zxdg_output_manager_v1 = wl_registry_bind(wl_registry, name, &zxdg_output_manager_v1_interface, 2);
+         if (zxdg_output_manager_v1 != NULL) {
+@@ -1349,4 +1353,3 @@ struct wl_shm_pool *CreateShmPool(size_t size, const char *name, void **data, in
+     }
+     return pool;
+ }
+-
+diff --git a/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.h b/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.h
+index 2c329835b916..8b579ee914d0 100644
+--- a/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.h
++++ b/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.h
+@@ -33,6 +33,7 @@
+ #include "xdg-output-unstable-v1.h"
+ #include "primary-selection-unstable-v1.h"
+ #include "viewporter.h"
++#include "fractional-scale-v1.h"
+ #include "relative-pointer-unstable-v1.h"
+ #include "text-input-unstable-v3.h"
+ #include "xdg-decoration-unstable-v1.h"
+@@ -67,6 +68,7 @@ extern struct wl_compositor *wl_compositor;
+ extern struct wl_subcompositor *wl_subcompositor;
+ extern struct xdg_wm_base *xdg_wm_base;
+ extern struct wp_viewporter *wp_viewporter;
++extern struct wp_fractional_scale_manager_v1 *wp_fractional_scale_manager_v1; // optional, check for NULL before use
+ extern struct xdg_activation_v1 *xdg_activation_v1; // optional, check for NULL before use
+ extern struct wl_cursor_theme *wl_cursor_theme;
+ extern struct wl_data_device_manager *wl_ddm;
+diff --git a/test/jdk/java/awt/Toolkit/Wayland/WLFractionalScaleMetrics.java b/test/jdk/java/awt/Toolkit/Wayland/WLFractionalScaleMetrics.java
+new file mode 100644
+index 000000000000..6c7dcf079fdb
+--- /dev/null
++++ b/test/jdk/java/awt/Toolkit/Wayland/WLFractionalScaleMetrics.java
+@@ -0,0 +1,70 @@
++/*
++ * Copyright (c) 2026, JetBrains s.r.o.. All rights reserved.
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * This code is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 only, as
++ * published by the Free Software Foundation.
++ *
++ * This code is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * version 2 for more details (a copy is included in the LICENSE file that
++ * accompanied this code).
++ *
++ * You should have received a copy of the GNU General Public License version
++ * 2 along with this work; if not, write to the Free Software Foundation,
++ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
++ *
++ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
++ * or visit www.oracle.com if you need additional information or have any
++ * questions.
++ */
++
++/*
++ * @test
++ * @summary Verifies fractional Wayland scale calculation from output metrics
++ * @requires os.family == "linux"
++ * @run main/othervm
++ *      --add-opens=java.desktop/sun.awt.wl=ALL-UNNAMED
++ *      -Dsun.java2d.uiScale.enabled=false
++ *      WLFractionalScaleMetrics
++ */
++
++import java.lang.reflect.Method;
++
++public class WLFractionalScaleMetrics {
++    private static final Method EFFECTIVE_SCALE_FROM;
++
++    static {
++        try {
++            Class<?> scaleUtils = Class.forName("sun.awt.wl.WLScaleUtils");
++            EFFECTIVE_SCALE_FROM = scaleUtils.getDeclaredMethod(
++                    "fromOutputMetrics", int.class,
++                    int.class, int.class, int.class, int.class);
++            EFFECTIVE_SCALE_FROM.setAccessible(true);
++        } catch (ReflectiveOperationException e) {
++            throw new ExceptionInInitializerError(e);
++        }
++    }
++
++    public static void main(String[] args) throws ReflectiveOperationException {
++        check(2.5, 3, 2560, 1440, 1024, 576);
++        check(1.25, 2, 3000, 2000, 2400, 1600);
++        check(2.0, 2, 2560, 1440, 1280, 720);
++        check(3.0, 3, 0, 1440, 1024, 576);
++        check(2.0, 2, 3840, 2160, 1280, 720);
++    }
++
++    private static void check(double expected,
++                              int displayScale,
++                              int width, int height,
++                              int widthLogical, int heightLogical)
++            throws ReflectiveOperationException {
++        double actual = (double) EFFECTIVE_SCALE_FROM.invoke(
++                null, displayScale, width, height, widthLogical, heightLogical);
++        if (Double.compare(expected, actual) != 0) {
++            throw new RuntimeException("Expected scale " + expected + ", got " + actual);
++        }
++    }
++}

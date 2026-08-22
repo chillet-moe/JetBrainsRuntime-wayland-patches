@@ -97,8 +97,8 @@ Runtime version: 25.0.3+9-b508.16 amd64
 Use a JBR 25 baseline for the patch. Exact build matching is optional:
 
 - Preferred general baseline: `jbr25` or the closest current JBR 25 branch available locally.
-- Current selected baseline: `jb25.0.4-b570`
-  (`25b665dd51df4873cd9a5e4b40fad07857730d32`).
+- Current selected baseline: `jbr25` after `jb25.0.4-b570`
+  (`868e6eaecc700d03b903fcb3b723d30c17d64de4`).
 - Do not use `main` for the IDE runtime deliverable if it points at a newer JDK line such as JDK 27.
 
 The patch is intentionally small and should be easy to cherry-pick between JBR 25 branches/tags.
