@@ -2,35 +2,7 @@ diff --git a/src/java.desktop/share/classes/sun/java2d/SunGraphics2D.java b/src/
 index 30921f3..7a4abbf 100644
 --- a/src/java.desktop/share/classes/sun/java2d/SunGraphics2D.java
 +++ b/src/java.desktop/share/classes/sun/java2d/SunGraphics2D.java
-@@ -3372,6 +3372,13 @@ public boolean drawImage(Image img, int x, int y, int width, int height,
- 
-         final int imgW = img.getWidth(null);
-         final int imgH = img.getHeight(null);
-+        boolean imageCopied = drawImageAsCopy(img, x, y, x + width, y + height,
-+                                               0, 0, imgW, imgH,
-+                                               bg, observer);
-+        if (imageCopied) {
-+            return true;
-+        }
-+
-         Boolean hidpiImageDrawn = drawHiDPIImage(img, x, y, x + width, y + height,
-                                                  0, 0, imgW, imgH, bg, observer,
-                                                  null);
-@@ -3422,6 +3429,13 @@ public boolean drawImage(Image img, int x, int y, Color bg,
- 
-         final int imgW = img.getWidth(null);
-         final int imgH = img.getHeight(null);
-+        boolean imageCopied = drawImageAsCopy(img, x, y, x + imgW, y + imgH,
-+                                               0, 0, imgW, imgH,
-+                                               bg, observer);
-+        if (imageCopied) {
-+            return true;
-+        }
-+
-         Boolean hidpiImageDrawn = drawHiDPIImage(img, x, y, x + imgW, y + imgH,
-                                                  0, 0, imgW, imgH, bg, observer,
-                                                  null);
-@@ -3477,6 +3491,13 @@ public boolean drawImage(Image img,
+@@ -3477,6 +3477,13 @@ public boolean drawImage(Image img,
              return true;
          }
  
@@ -44,7 +16,7 @@ index 30921f3..7a4abbf 100644
          Boolean hidpiImageDrawn = drawHiDPIImage(img, dx1, dy1, dx2, dy2,
                                                   sx1, sy1, sx2, sy2,
                                                   bgcolor, observer, null);
-@@ -3533,6 +3554,56 @@ public boolean drawImage(Image img,
+@@ -3533,6 +3540,59 @@ public boolean drawImage(Image img,
          }
      }
  
@@ -71,10 +43,14 @@ index 30921f3..7a4abbf 100644
 +            }
 +            if (sd.getDefaultScaleX() == transform.getScaleX() &&
 +                    sd.getDefaultScaleY() == transform.getScaleY()) {
-+                dx1 = Region.clipRound(transform.getScaleX() * dx1);
-+                dx2 = Region.clipRound(transform.getScaleX() * dx2);
-+                dy1 = Region.clipRound(transform.getScaleY() * dy1);
-+                dy2 = Region.clipRound(transform.getScaleY() * dy2);
++                dx1 = Region.clipRound(transform.getScaleX() * dx1
++                        + transform.getTranslateX());
++                dx2 = Region.clipRound(transform.getScaleX() * dx2
++                        + transform.getTranslateX());
++                dy1 = Region.clipRound(transform.getScaleY() * dy1
++                        + transform.getTranslateY());
++                dy2 = Region.clipRound(transform.getScaleY() * dy2
++                        + transform.getTranslateY());
 +                sx1 = Region.clipRound(transform.getScaleX() * sx1);
 +                sx2 = Region.clipRound(transform.getScaleX() * sx2);
 +                sy1 = Region.clipRound(transform.getScaleY() * sy1);
@@ -85,8 +61,7 @@ index 30921f3..7a4abbf 100644
 +                    return false;
 +                }
 +                AffineTransform old = new AffineTransform(transform);
-+                setTransform(AffineTransform.getTranslateInstance(
-+                        transform.getTranslateX(), transform.getTranslateY()));
++                setTransform(new AffineTransform());
 +                try {
 +                    return copyImage(img, dx1, dy1, sx1, sy1,
 +                                     width, height, bgcolor, observer);
@@ -106,7 +81,7 @@ new file mode 100644
 index 0000000..b89b4e6
 --- /dev/null
 +++ b/test/jdk/sun/java2d/SameScaleImageCopy.java
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,137 @@
 +/*
 + * Copyright (c) 2026, JetBrains s.r.o.. All rights reserved.
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -179,13 +154,6 @@ index 0000000..b89b4e6
 +
 +        BufferedImage sourcePixels = (BufferedImage)
 +                ((SurfaceData) source.getDestSurface()).getDestination();
-+        verifyCopy("positioned", scale, sourcePixels,
-+                0, 0, 1, 1, LOGICAL_SIZE, LOGICAL_SIZE,
-+                g -> g.drawImage(source, 1, 1, null));
-+        verifyCopy("sized", scale, sourcePixels,
-+                0, 0, 1, 1, LOGICAL_SIZE, LOGICAL_SIZE,
-+                g -> g.drawImage(source,
-+                        1, 1, LOGICAL_SIZE, LOGICAL_SIZE, null));
 +        verifyCopy("subregion", scale, sourcePixels,
 +                1, 1, 1, 1, 6, 6,
 +                g -> g.drawImage(source,
@@ -200,35 +168,43 @@ index 0000000..b89b4e6
 +                                   int destinationX, int destinationY,
 +                                   int logicalWidth, int logicalHeight,
 +                                   Drawer drawer) {
-+        BufferedImage destination = new BufferedImage(
-+                roundCoordinate(12 * scale),
-+                roundCoordinate(12 * scale),
-+                BufferedImage.TYPE_INT_ARGB_PRE);
-+        SurfaceData destinationData = BufImgSurfaceData.createData(
-+                destination, scale, scale);
-+        Graphics2D destinationGraphics = new SunGraphics2D(
-+                destinationData, Color.BLACK, Color.WHITE, null);
-+        drawer.draw(destinationGraphics);
-+        destinationGraphics.dispose();
++        for (int translation = 0; translation <= 1; translation++) {
++            BufferedImage destination = new BufferedImage(
++                    roundCoordinate(12 * scale),
++                    roundCoordinate(12 * scale),
++                    BufferedImage.TYPE_INT_ARGB_PRE);
++            SurfaceData destinationData = BufImgSurfaceData.createData(
++                    destination, scale, scale);
++            Graphics2D destinationGraphics = new SunGraphics2D(
++                    destinationData, Color.BLACK, Color.WHITE, null);
++            destinationGraphics.translate(translation, translation);
++            drawer.draw(destinationGraphics);
++            destinationGraphics.dispose();
 +
-+        int sourcePixelX = roundCoordinate(sourceX * scale);
-+        int sourcePixelY = roundCoordinate(sourceY * scale);
-+        int destinationPixelX = roundCoordinate(destinationX * scale);
-+        int destinationPixelY = roundCoordinate(destinationY * scale);
-+        int pixelWidth = roundCoordinate((sourceX + logicalWidth) * scale)
-+                - sourcePixelX;
-+        int pixelHeight = roundCoordinate((sourceY + logicalHeight) * scale)
-+                - sourcePixelY;
-+        for (int y = 0; y < pixelHeight; y++) {
-+            for (int x = 0; x < pixelWidth; x++) {
-+                int expected = source.getRGB(sourcePixelX + x, sourcePixelY + y);
-+                int actual = destination.getRGB(
-+                        destinationPixelX + x, destinationPixelY + y);
-+                if (actual != expected) {
-+                    throw new RuntimeException(variant + " pixel mismatch at " + x + "," + y
-+                            + " at " + scale + "x scale"
-+                            + ": expected 0x" + Integer.toHexString(expected)
-+                            + ", got 0x" + Integer.toHexString(actual));
++            int sourcePixelX = roundCoordinate(sourceX * scale);
++            int sourcePixelY = roundCoordinate(sourceY * scale);
++            int destinationPixelX = roundCoordinate(
++                    (destinationX + translation) * scale);
++            int destinationPixelY = roundCoordinate(
++                    (destinationY + translation) * scale);
++            int pixelWidth = roundCoordinate((sourceX + logicalWidth) * scale)
++                    - sourcePixelX;
++            int pixelHeight = roundCoordinate((sourceY + logicalHeight) * scale)
++                    - sourcePixelY;
++            for (int y = 0; y < pixelHeight; y++) {
++                for (int x = 0; x < pixelWidth; x++) {
++                    int expected = source.getRGB(
++                            sourcePixelX + x, sourcePixelY + y);
++                    int actual = destination.getRGB(
++                            destinationPixelX + x, destinationPixelY + y);
++                    if (actual != expected) {
++                        throw new RuntimeException(variant
++                                + " pixel mismatch at " + x + "," + y
++                                + " at " + scale + "x scale with translation "
++                                + translation + ": expected 0x"
++                                + Integer.toHexString(expected) + ", got 0x"
++                                + Integer.toHexString(actual));
++                    }
 +                }
 +            }
 +        }

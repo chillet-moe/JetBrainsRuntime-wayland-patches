@@ -37,10 +37,13 @@ compositor maps the fractional-size buffer without the old integer-scale
 downsample. This applies to both the shared-memory and Vulkan surface paths.
 
 `0005-fractional-scale-image-copy.patch` keeps Swing's same-scale back-buffer
-copies pixel-exact for the positioned, explicitly sized, and source-region
-`drawImage` overloads. Without it, `SunGraphics2D` sends a fractionally scaled
-image through the generic image-scaling path, where separate source and
-destination rounding can move content by a pixel during partial repaint.
+source-region copies pixel-exact. The optimization is deliberately limited to
+the source-region `drawImage` overload used for partial back-buffer copies;
+ordinary positioned and sized image drawing retains its existing HiDPI image
+and resolution-variant handling. Without the patch, `SunGraphics2D` sends a
+fractionally scaled back buffer through the generic image-scaling path, where
+separate source and destination rounding can move content by a pixel during
+partial repaint.
 
 `0006-defer-incomplete-frame-commits.patch` prevents partially painted content
 from reaching Wayland. Swing updates the native window only after its outermost
