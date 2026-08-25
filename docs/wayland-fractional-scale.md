@@ -37,11 +37,18 @@ compositor maps the fractional-size buffer without the old integer-scale
 downsample. This applies to both the shared-memory and Vulkan surface paths.
 
 `0005-fractional-scale-image-copy.patch` keeps Swing's same-scale back-buffer
-copies pixel-exact. Without it, `SunGraphics2D` sends a fractionally scaled
+copies pixel-exact for the positioned, explicitly sized, and source-region
+`drawImage` overloads. Without it, `SunGraphics2D` sends a fractionally scaled
 image through the generic image-scaling path, where separate source and
-destination rounding can move content by a pixel during partial repaint. This
-is the common cause of the transient content jumps tracked as JBR-7204; it is
-not a change in the top-level window's logical size.
+destination rounding can move content by a pixel during partial repaint.
+
+`0006-defer-incomplete-frame-commits.patch` prevents partially painted content
+from reaching Wayland. Swing updates the native window only after its outermost
+double-buffered paint has ended, and the native buffer manager does not publish
+new damage from a frame callback until Java has committed that complete frame.
+Together these address the common transient-content movement tracked as
+JBR-7203 and JBR-7204; neither issue is a change in the top-level window's
+logical size.
 
 If `wp_fractional_scale_manager_v1` is absent, the per-surface protocol object
 is not created. Integer scaling remains the fallback. An explicit
@@ -58,8 +65,8 @@ Wayland session:
    headers, then build `java.desktop-gensrc-only` and
    `java.desktop-java-only`.
 3. Generate `java.desktop-libs-compile-commands` and compile the changed
-   `WLSurface.c`, `WLToolkit.c`, and `WLSMSurfaceData.c` entries with their
-   exact generated commands.
+   `WLSurface.c`, `WLToolkit.c`, `WLSMSurfaceData.c`, and `WLBuffers.c` entries
+   with their exact generated commands.
 4. Run `WLFractionalScaleMetrics` and `SameScaleImageCopy` headlessly. The
    latter verifies raw backing-buffer pixels after same-scale copies at 1.25x,
    1.5x, 2x, and 2.5x; neither test connects to a display server.

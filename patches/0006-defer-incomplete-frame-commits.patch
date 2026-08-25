@@ -1,0 +1,112 @@
+diff --git a/src/java.desktop/share/classes/javax/swing/JComponent.java b/src/java.desktop/share/classes/javax/swing/JComponent.java
+index 9a95ad6..ced35fb 100644
+--- a/src/java.desktop/share/classes/javax/swing/JComponent.java
++++ b/src/java.desktop/share/classes/javax/swing/JComponent.java
+@@ -1112,6 +1112,7 @@ public void paint(Graphics g) {
+                 } finally {
+                     repaintManager.endPaint();
+                 }
++                repaintManager.afterPaint(this);
+             }
+             else {
+                 // Will occasionally happen in 1.2, especially when printing.
+@@ -1162,6 +1163,7 @@ void paintForceDoubleBuffered(Graphics g) {
+             rm.endPaint();
+             setFlag(IS_REPAINTING, false);
+         }
++        rm.afterPaint(this);
+     }
+ 
+     /**
+@@ -5278,6 +5280,7 @@ void _paintImmediately(int x, int y, int w, int h) {
+                         } finally {
+                             rm.endPaint();
+                         }
++                        rm.afterPaint(paintingComponent);
+                     } else {
+                         g.setClip(paintImmediatelyClip.x, paintImmediatelyClip.y,
+                                 paintImmediatelyClip.width, paintImmediatelyClip.height);
+diff --git a/src/java.desktop/share/classes/javax/swing/RepaintManager.java b/src/java.desktop/share/classes/javax/swing/RepaintManager.java
+index 2fb3a6c..36aa91b 100644
+--- a/src/java.desktop/share/classes/javax/swing/RepaintManager.java
++++ b/src/java.desktop/share/classes/javax/swing/RepaintManager.java
+@@ -1262,6 +1262,10 @@ boolean useVolatileDoubleBuffer() {
+     private synchronized boolean isPaintingThread() {
+         return (Thread.currentThread() == paintThread);
+     }
++
++    private synchronized boolean isPaintInProgress() {
++        return paintThread != null;
++    }
+     //
+     // Paint methods.  You very, VERY rarely need to invoke these.
+     // They are invoked directly from JComponent's painting code and
+@@ -1299,7 +1303,12 @@ void paint(JComponent paintingComponent,
+             g.setClip(x, y, w, h);
+             paintingComponent.paintToOffscreen(g, x, y, w, h, x + w, y + h);
+         }
++    }
+ 
++    void afterPaint(JComponent paintingComponent) {
++        if (isPaintInProgress()) {
++            return;
++        }
+         if (Toolkit.getDefaultToolkit() instanceof SunToolkit tk) {
+             final Window window = SwingUtilities.getWindowAncestor(paintingComponent);
+             if (window != null && tk.needUpdateWindowAfterPaint()) {
+diff --git a/src/java.desktop/unix/native/common/java2d/wl/WLBuffers.c b/src/java.desktop/unix/native/common/java2d/wl/WLBuffers.c
+index 53e2636..19eae38 100644
+--- a/src/java.desktop/unix/native/common/java2d/wl/WLBuffers.c
++++ b/src/java.desktop/unix/native/common/java2d/wl/WLBuffers.c
+@@ -281,6 +281,7 @@ struct WLDrawBuffer {
+     jint                     width;
+     jint                     height;
+     jboolean                 resizePending;  /// The next access to the buffer requires DrawBufferResize()
++    jboolean                 committed;      /// Whether the buffer contains a complete committed frame
+     size_t                   bytesAllocated; /// the size of the memory segment pointed to by data
+     pixel_t *                data;       /// Actual pixels of the buffer
+     DamageList *             damageList; /// Areas of the buffer that may have been altered
+@@ -717,7 +718,8 @@ static bool
+ TryCopyDrawBufferToShowBuffer(WLSurfaceBufferManager * manager, bool sendNow)
+ {
+     MUTEX_LOCK(manager->drawLock); // So that the size doesn't change while we copy
+-    sendNow = sendNow && ShowBufferIsAvailable(manager);
++    sendNow = sendNow && manager->bufferForDraw.committed
++            && ShowBufferIsAvailable(manager);
+     if (sendNow) {
+         CopyDrawBufferToShowBuffer(manager);
+     }
+@@ -1015,6 +1017,7 @@ static void ResetBuffers(WLSurfaceBufferManager * manager) {
+     // Make sure the draw buffer is not copied from and re-set before drawn upon again
+     MUTEX_LOCK(manager->drawLock);
+     manager->bufferForDraw.resizePending = true;
++    manager->bufferForDraw.committed = false;
+     MUTEX_UNLOCK(manager->drawLock);
+ 
+     // All the damage refers to a surface that doesn't exist anymore; clean the lists
+@@ -1212,6 +1215,9 @@ void
+ WLSBM_SurfaceCommit(WLSurfaceBufferManager * manager)
+ {
+     MUTEX_LOCK(manager->showLock);
++    MUTEX_LOCK(manager->drawLock);
++    manager->bufferForDraw.committed = true;
++    MUTEX_UNLOCK(manager->drawLock);
+ 
+     const bool frameCallbackScheduled = IsFrameCallbackScheduled(manager);
+     WLBufferTrace(manager, "WLSBM_SurfaceCommit (%x, %s)",
+@@ -1236,6 +1242,7 @@ WLSB_Damage(WLDrawBuffer * buffer, jint x, jint y, jint width, jint height)
+     assert(x + width <= buffer->manager->bufferForDraw.width);
+     assert(y + height <= buffer->manager->bufferForDraw.height);
+ 
++    buffer->committed = false;
+     buffer->damageList = DamageList_Add(buffer->damageList, x, y, width, height);
+     WLBufferTrace(buffer->manager, "WLSB_Damage (at %d, %d %dx%d)", x, y, width, height);
+ }
+@@ -1261,6 +1268,7 @@ WLSBM_SizeChangeTo(WLSurfaceBufferManager * manager, jint width, jint height)
+         manager->bufferForDraw.width  = width;
+         manager->bufferForDraw.height = height;
+         manager->bufferForDraw.resizePending = true;
++        manager->bufferForDraw.committed = false;
+         // Pretend the current buffer is empty as its scan line may be different
+         // making the existing content undisplayable anyway.
+         DamageList_FreeAll(manager->bufferForDraw.damageList);
