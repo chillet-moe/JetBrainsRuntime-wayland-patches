@@ -1,0 +1,188 @@
+diff --git a/src/java.desktop/share/classes/sun/java2d/SunGraphics2D.java b/src/java.desktop/share/classes/sun/java2d/SunGraphics2D.java
+index 30921f3906f5..18b69a81fe7a 100644
+--- a/src/java.desktop/share/classes/sun/java2d/SunGraphics2D.java
++++ b/src/java.desktop/share/classes/sun/java2d/SunGraphics2D.java
+@@ -3477,6 +3477,13 @@ public boolean drawImage(Image img,
+             return true;
+         }
+ 
++        boolean imageCopied = drawImageAsCopy(img, dx1, dy1, dx2, dy2,
++                                               sx1, sy1, sx2, sy2,
++                                               bgcolor, observer);
++        if (imageCopied) {
++            return true;
++        }
++
+         Boolean hidpiImageDrawn = drawHiDPIImage(img, dx1, dy1, dx2, dy2,
+                                                  sx1, sy1, sx2, sy2,
+                                                  bgcolor, observer, null);
+@@ -3533,6 +3540,56 @@ public boolean drawImage(Image img,
+         }
+     }
+ 
++    /**
++     * Tries to draw an image as a pixel-exact copy when the image and the
++     * destination use the same scale and the transform has no rotation.
++     * The generic image scaling path rounds both transformations separately,
++     * which can shift pixels at fractional scales.
++     */
++    private boolean drawImageAsCopy(Image img,
++                                    int dx1, int dy1, int dx2, int dy2,
++                                    int sx1, int sy1, int sx2, int sy2,
++                                    Color bgcolor, ImageObserver observer) {
++        if (dx2 - dx1 == sx2 - sx1 &&
++                dy2 - dy1 == sy2 - sy1 &&
++                sx1 <= sx2 && sy1 <= sy2 &&
++                dx1 <= dx2 && dy1 <= dy2 &&
++                transformState <= TRANSFORM_TRANSLATESCALE) {
++            final SurfaceData sd;
++            try {
++                sd = SurfaceManager.getManager(img).getPrimarySurfaceData();
++            } catch (InvalidPipeException e) {
++                return false;
++            }
++            if (sd.getDefaultScaleX() == transform.getScaleX() &&
++                    sd.getDefaultScaleY() == transform.getScaleY()) {
++                dx1 = Region.clipRound(transform.getScaleX() * dx1);
++                dx2 = Region.clipRound(transform.getScaleX() * dx2);
++                dy1 = Region.clipRound(transform.getScaleY() * dy1);
++                dy2 = Region.clipRound(transform.getScaleY() * dy2);
++                sx1 = Region.clipRound(transform.getScaleX() * sx1);
++                sx2 = Region.clipRound(transform.getScaleX() * sx2);
++                sy1 = Region.clipRound(transform.getScaleY() * sy1);
++                sy2 = Region.clipRound(transform.getScaleY() * sy2);
++                int width = dx2 - dx1;
++                int height = dy2 - dy1;
++                if (width != sx2 - sx1 || height != sy2 - sy1) {
++                    return false;
++                }
++                AffineTransform old = new AffineTransform(transform);
++                setTransform(AffineTransform.getTranslateInstance(
++                        transform.getTranslateX(), transform.getTranslateY()));
++                try {
++                    return copyImage(img, dx1, dy1, sx1, sy1,
++                                     width, height, bgcolor, observer);
++                } finally {
++                    setTransform(old);
++                }
++            }
++        }
++        return false;
++    }
++
+     /**
+      * Draw an image, applying a transform from image space into user space
+      * before drawing.
+diff --git a/test/jdk/sun/java2d/SameScaleImageCopy.java b/test/jdk/sun/java2d/SameScaleImageCopy.java
+new file mode 100644
+index 000000000000..fc6c03f7b403
+--- /dev/null
++++ b/test/jdk/sun/java2d/SameScaleImageCopy.java
+@@ -0,0 +1,107 @@
++/*
++ * Copyright (c) 2026, JetBrains s.r.o.. All rights reserved.
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * This code is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 only, as
++ * published by the Free Software Foundation.
++ *
++ * This code is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * version 2 for more details (a copy is included in the LICENSE file that
++ * accompanied this code).
++ *
++ * You should have received a copy of the GNU General Public License version
++ * 2 along with this work; if not, write to the Free Software Foundation,
++ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
++ *
++ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
++ * or visit www.oracle.com if you need additional information or have any
++ * questions.
++ */
++
++/*
++ * @test
++ * @bug JBR-7204
++ * @summary Same-scale image copies are pixel-exact at fractional scales
++ * @modules java.desktop/sun.awt.image
++ *          java.desktop/sun.java2d
++ * @run main/othervm -Djava.awt.headless=true SameScaleImageCopy
++ */
++
++import java.awt.Color;
++import java.awt.Graphics2D;
++import java.awt.Transparency;
++import java.awt.image.BufferedImage;
++
++import sun.awt.image.BufImgSurfaceData;
++import sun.awt.image.BufferedImageGraphicsConfig;
++import sun.awt.image.SunVolatileImage;
++import sun.java2d.SurfaceData;
++import sun.java2d.SunGraphics2D;
++
++public class SameScaleImageCopy {
++    private static final double[] SCALES = { 1.25, 1.5, 2.0, 2.5 };
++    private static final int LOGICAL_SIZE = 8;
++
++    public static void main(String[] args) {
++        for (double scale : SCALES) {
++            testScale(scale);
++        }
++    }
++
++    private static void testScale(double scale) {
++        BufferedImage template = new BufferedImage(
++                1, 1, BufferedImage.TYPE_INT_ARGB_PRE);
++        var gc = BufferedImageGraphicsConfig.getConfig(template, scale, scale);
++        var source = new SunVolatileImage(
++                gc, LOGICAL_SIZE, LOGICAL_SIZE, Transparency.TRANSLUCENT, null);
++
++        Graphics2D sourceGraphics = source.createGraphics();
++        for (int y = 0; y < LOGICAL_SIZE; y++) {
++            for (int x = 0; x < LOGICAL_SIZE; x++) {
++                sourceGraphics.setColor(((x + y) & 1) == 0
++                        ? Color.BLACK : Color.WHITE);
++                sourceGraphics.fillRect(x, y, 1, 1);
++            }
++        }
++        sourceGraphics.dispose();
++
++        BufferedImage destination = new BufferedImage(
++                roundCoordinate(LOGICAL_SIZE * scale),
++                roundCoordinate(LOGICAL_SIZE * scale),
++                BufferedImage.TYPE_INT_ARGB_PRE);
++        SurfaceData destinationData = BufImgSurfaceData.createData(
++                destination, scale, scale);
++        Graphics2D destinationGraphics = new SunGraphics2D(
++                destinationData, Color.BLACK, Color.WHITE, null);
++        destinationGraphics.drawImage(source,
++                1, 1, 7, 7,
++                1, 1, 7, 7,
++                null);
++        destinationGraphics.dispose();
++
++        BufferedImage sourcePixels = (BufferedImage)
++                ((SurfaceData) source.getDestSurface()).getDestination();
++        int sourceOrigin = roundCoordinate(1 * scale);
++        int destinationOrigin = sourceOrigin;
++        int copiedSize = roundCoordinate(7 * scale) - destinationOrigin;
++        for (int y = 0; y < copiedSize; y++) {
++            for (int x = 0; x < copiedSize; x++) {
++                int expected = sourcePixels.getRGB(sourceOrigin + x, sourceOrigin + y);
++                int actual = destination.getRGB(destinationOrigin + x, destinationOrigin + y);
++                if (actual != expected) {
++                    throw new RuntimeException("Pixel mismatch at " + x + "," + y
++                            + " at " + scale + "x scale"
++                            + ": expected 0x" + Integer.toHexString(expected)
++                            + ", got 0x" + Integer.toHexString(actual));
++                }
++            }
++        }
++    }
++
++    private static int roundCoordinate(double coordinate) {
++        return (int) Math.ceil(coordinate - 0.5);
++    }
++}
